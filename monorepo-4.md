@@ -285,7 +285,7 @@ Sekarang kita akan deploy backend & frontend ke vercel (2 proyek terpisah).
 - Backend (Setingan ini dapat dilihat di halaman **Build and Deployment**)
   - name: `monorepo-be`
   - **Framework**: `Elysia` (sisanya biarkan default, bakal di timpa sama settingan di `vercel.json`)
-  - **Root Directory**: `apps/backend`
+  - **Root Directory**: `apps/backend`, centang bagian `Skip Deployments when there are no changes...`
   - **Ignore Build Steps**:
     - **Behaviour**: `Only build if there are changes in a folder`
     - **Command**: `git diff HEAD^ HEAD --quiet -- ./` (ubah jadi `./`)
@@ -297,7 +297,7 @@ Sekarang kita akan deploy backend & frontend ke vercel (2 proyek terpisah).
     - **Build Command**: `bun run build`
     - **Output Directory**: `dist`
     - **Install Command**: `bun install --ignore-scripts`
-  - **Root Directory**: `apps/frontend`
+  - **Root Directory**: `apps/frontend`, centang bagian `Skip Deployments when there are no changes...`
   - **Ignore Build Steps**:
     - **Behaviour**: `Only build if there are changes in a folder`
     - **Command**: `git diff HEAD^ HEAD --quiet -- ./`
