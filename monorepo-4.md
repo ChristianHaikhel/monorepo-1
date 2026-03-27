@@ -62,7 +62,7 @@ export const prisma = new PrismaClient({ adapter });
 
 ### 4. **package.json**
 Beberapa script **ditambahkan/dimodifikasi** untuk fungsi build vercel & seed database.
-   - Vercel: `build` pakai tsdown, `postinstall` untuk memastikan prisma di generate setelah build (double check).
+   - Vercel: `build` pakai tsdown, `start` untuk cek hasil build. `postinstall` untuk memastikan prisma di generate setelah build (double check di vercel). 
    - Turso: 
      - generate file `baseline.sql` (skema) -> masukkan ke database turso.
      - Seeding data tabel user ke database turso.
@@ -71,6 +71,7 @@ Beberapa script **ditambahkan/dimodifikasi** untuk fungsi build vercel & seed da
 {
   "scripts": {
     "build": "prisma generate && tsdown",
+    "start": "bun dist/index.mjs",
     "postinstall": "prisma generate",
     "prod:sql": "bunx prisma migrate diff --from-empty --to-schema prisma/schema.prisma --script > baseline.sql",
     "prod:check-env": "bun --env-file=.env.production -e \"console.log(process.env.DATABASE_URL)\"",
@@ -111,7 +112,6 @@ bun prod:sql # generate file baseline.sql
 bun prod:check-env # cek dulu DATABASE_URL sudah pakai url Turso. Jika sudah, lanjut!
 bun prod:migrate # run query dari file baseline.sql. berisi skema tabel
 bun prod:seed # mengisi data ke dalam tabel
-bun dev:turso # Cek koneksi development server dengan turso database
 ```
 > [?] migrate.ts sebenarnya fungsi untuk menjalankan query, anda dapat menggunakan kode ini jiga ingin mengubah skema database (tinggal edit file sql nya).
 
@@ -138,26 +138,41 @@ const isBrowserRequest = (request: Request): boolean => {
 const app = new Elysia()
   .use(cors({ origin: [process.env.FRONTEND_URL ?? "", process.env.TEST_URL ?? ""] }))
   .onRequest(({ request, set }) => {
-    const origin = request.headers.get("origin");
-    const frontendUrl = process.env.FRONTEND_URL ?? "";
+    const url = new URL(request.url);
+    // HANYA jalankan logika jika path dimulai dengan /users
+    if (url.pathname.startsWith("/users")) {
+      const origin = request.headers.get("origin");
+      const frontendUrl = process.env.FRONTEND_URL ?? "";
 
-    // Jika request dari FRONTEND_URL → langsung izinkan
-    if (origin && origin === frontendUrl) return;
+      // Jika request dari FRONTEND_URL → langsung izinkan
+      if (origin && origin === frontendUrl) return;
 
-    // Jika akses dari browser langsung → wajib ada ?key=
-    if (isBrowserRequest(request)) {
-      const url = new URL(request.url);
-      const key = url.searchParams.get("key");
+      // Jika akses dari browser langsung → wajib ada ?key=
+      if (isBrowserRequest(request)) {
+        const key = url.searchParams.get("key");
 
-      if (!key || key !== process.env.API_KEY) {
-        set.status = 401;
-        return { message: "Unauthorized: missing or invalid key" };
+        if (!key || key !== process.env.API_KEY) {
+          set.status = 401;
+          return { message: "Unauthorized: missing or invalid key" };
+        }
       }
     }
   })
   // ... lanjutan route kode lainnya (google, akses database)
   // !!! ubah url frontend jadi dynamic ambil dari env (lakukan ke semua file di apps/backend), contoh:
       return redirect(`${process.env.FRONTEND_URL}/classroom`);
+
+  // !!! tambahakan Endpoint test prisma client Elysia atau function utama (sering bermasalah)
+  .get("/debug-prisma", () => {
+    const generatedPath = path.resolve(__dirname, "../src/generated/prisma/client");
+    const exists = fs.existsSync(generatedPath);
+
+    return {
+      path: generatedPath,
+      exists: exists,
+      files: exists ? fs.readdirSync(generatedPath) : []
+    };
+  });
   // !!! hapus bagian .listen(3000);
 
 // !!! hapus console log "yang terbuka" ini:
@@ -177,7 +192,7 @@ export default app;
 ```
 Beberapa modifikasi:
 - Ubah url ke relatif. `FRONTEND_URL` untuk url utama, `TEST_URL` dapat diset `*` untuk unlock semua url (memudahkan debugging/development).
-- gunakan API_KEY sebagai param untuk akses route.
+- gunakan API_KEY sebagai param untuk akses route `/users` (*protect data in database*).
 - Console log dynamic mengikuti variabel & tidak tampil di production.
 - export default app untuk Elysia dibaca oleh Vercel.
 
@@ -207,6 +222,44 @@ DB_AUTH_TOKEN=eyJhbGciOiJFZERTQSxxxxx
 ```
 
 > 🚨 Jangan lupa tambahkan file env tersebut ke `.gitignore`
+
+### 7. Test backend Build
+Untuk memeriksa apakah koneksi turso backend & build (untuk vercel) berhasil:
+```bash
+bun dev:turso # Cek koneksi development server dengan turso database. Jika App2.tsx menampilkan list, maka berhasil.
+bun run build # jalankan build ke output
+bun start # cek hasil build di dist/index.mjs. periksa path /users, dan debug-prisma (jika file ada maka berhasil) 
+```
+
+**Jika bun start Gagal**, karena error `Cannot file module './generated/prisma/client'`:
+```bash
+apps\backend>bun start
+$ bun dist/index.mjs
+error: Cannot find module './generated/prisma/client' from 'C:\repo\ppwl\apps\backend\dist\index.mjs'
+```
+Solusinya:
+- hapus folder `apps/backend/node_modules/.prisma` (jika ada)
+- hapus juga file `bun.lock`
+- jalankan `bun install` di root. lalu jika berhasil ikuti seperti ini:
+```bash
+>cd apps/backend
+
+>\apps\backend>bun run build
+$ prisma generate && tsdown
+Loaded Prisma config from prisma.config.ts.
+
+Prisma schema loaded from prisma\schema.prisma.
+
+✔ Generated Prisma Client (7.5.0) to .\src\generated\prisma in 133ms
+# kode lainnya
+✔ Build complete in 185ms
+
+>\apps\backend>bun start
+$ bun dist/index.mjs
+🦊 Backend → http://localhost:3000
+🦊 TEST_URL: *
+🦊 DATABASE_URL: file:./dev.db
+```
 
 ## Apps/Frontend
 Ada beberapa setingan di local yang perlu dibuat/ubah:
@@ -293,7 +346,7 @@ Sekarang kita akan deploy backend & frontend ke vercel (2 proyek terpisah).
   - **Ignore Build Steps**:
     - **Behaviour**: `Only build if there are changes in a folder`
     - **Command**: `git diff HEAD^ HEAD --quiet -- ./` (pakai path `./`)
-    - Tambahkan **Environment Variables**: `FRONTEND_URL` (skip, tunggu frontend selesai di deploy), `API_KEY`, `DATABASE_URL`, `DB_AUTH_TOKEN`, dan variabel lainnya untuk fitur google.
+    - Tambahkan **Environment Variables**: `FRONTEND_URL` (skip, tunggu frontend selesai di deploy), `API_KEY`, `DATABASE_URL`, `DB_AUTH_TOKEN`, dan variabel lainnya untuk fitur google (terutama `GOOGLE_REDIRECT_URI` pakai url production backend ini).
 
 - Frontend:
   - name: `monorepo`
@@ -308,15 +361,31 @@ Sekarang kita akan deploy backend & frontend ke vercel (2 proyek terpisah).
   - **Environment Variables**: `VITE_BACKEND_URL` (dari production vercel), `VITE_CHECK` (supaya vite.config.ts run), port tidak perlu.
 
 **🚨Pastikan** `VITE_BACKEND_URL` atau `FRONTEND_URL` tidak pakap postfix `/`, contoh: 
- - Salah -> `https://monorepo.vercel.app/`
- - Benar -> `https://monorepo.vercel.app`
- - Khawait web salah membaca `${FRONTEND_URL}/user` -> bukannya https://monorepo.vercel.app/user, malah jadi https://monorepo.vercel.app//user
+- Khawait web salah membaca `${FRONTEND_URL}/user` -> bukannya https://monorepo.vercel.app/user, malah jadi https://monorepo.vercel.app//user
+   - Salah -> `https://monorepo.vercel.app/`
+   - Benar -> `https://monorepo.vercel.app`
 
 Info:
 - Jika ada bagian config yang ter skip, deployment akan error. Tidak apa, periksa di `Settings` -> `Build and Deployment` atau `Deployment Variabels` untuk menyesuaikan settingan.
 - Jika ada perubahan settingan build atau env di vercel, bisanya akan muncul opsi untuk re-deploy agar perubahan terbaca. Karena sudah setting Ignore Build Steps, jadi re deploy akan di tolak. Solusinya, lakukan perubahan kode di local, push ke github (otomatis trigger deploy).
 
-Test kedua web production, jika sudah keduanya aman, lakukan perubahan file `apps/backend/src/index.ts`, beri pesan commit `test perubahan di backend`, lalu push. Perhatikan halaman `Deployments` kedua project. Jika hanya backend yang ter deploy berarti settingan **Ignore Build Steps** berhasil.   
+## Google Console - Update redirect URI
+1. Buka **APIs & Services → Credentials**
+2. Buka credential yang sudah dibuat pada monorepo-3
+3. Tambahkan url baru ke **Authorized redirect URIs**, tambhakan url backend production. 
+```
+https://<backend-sub-domain>.vercel.app/auth/callback
+```
+
+## Test 
+Periksa kedua web production, 
+- Backend - root path -> `https://<backend-sub-domain>.vercel.app?key=learn`
+- Backend - users data -> `https://<backend-sub-domain>.vercel.app/users?key=learn`
+- Frontend - root path (App2) -> `https://<frontend-sub-domain>.vercel.app`
+- Frontend - classroom google -> `https://<frontend-sub-domain>.vercel.app/classroom`
+
+jika sudah keduanya aman, lakukan perubahan file `apps/backend/src/index.ts`, beri pesan commit `test perubahan di backend`, lalu push. Perhatikan halaman `Deployments` kedua project. Jika hanya backend yang ter deploy berarti settingan **Ignore Build Steps** berhasil.   
+
 ---
 
 ## Final
@@ -330,3 +399,7 @@ Yang dikumpulkan:
   - Vercel project: Halaman `Deployments` yang berisi list commit deploy dari kedua project (Frontend & Backend).
   
 SS nya full screen, terlihat waktu (supaya Asdos tau urutannya). Sisanya bisa Asdos cek sendiri.
+
+Contoh web production:
+  - [Frontend - monorepo-gamma-mauve.vercel.app](https://monorepo-gamma-mauve.vercel.app)
+  - [Backend - mono-asdos-backend.vercel.app](https://mono-asdos-backend.vercel.app)
